@@ -1,7 +1,7 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { ANALYTICS_EVENT } from '@hovod/db';
-import { findAssetOrFail } from '../services/asset.js';
+import { findAssetOrFail, parseMetadataFilters } from '../services/asset.js';
 import {
   insertAnalyticsEvents,
   getAssetAnalytics,
@@ -62,12 +62,13 @@ export async function analyticsRoutes(app: FastifyInstance) {
     },
   );
 
-  /* Organization overview */
-  app.get<{ Querystring: { period?: string } }>(
+  /* Organization overview (filterable by custom metadata: ?metadata.<key>=<value>) */
+  app.get<{ Querystring: Record<string, string> }>(
     '/v1/analytics/overview',
     async (request) => {
       const period = periodSchema.parse(request.query.period);
-      const data = await getOverviewAnalytics(period, request.orgId!);
+      const metadataFilters = parseMetadataFilters(request.query);
+      const data = await getOverviewAnalytics(period, request.orgId!, metadataFilters);
       return { data };
     },
   );

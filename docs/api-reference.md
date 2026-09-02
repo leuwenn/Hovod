@@ -152,6 +152,40 @@ curl "http://localhost:3002/v1/assets?limit=20&offset=40"
 
 ---
 
+### Source Sizes
+
+```
+GET /v1/assets/source-sizes
+```
+
+Computes the total size of the original source files for assets matching custom metadata filters. Only assets whose source object actually exists on storage are counted.
+
+**Query Parameters**
+
+| Param | Type | Default | Description |
+|-------|------|---------|-------------|
+| `metadata.<key>` | `string` | — | Filter by custom metadata (e.g. `?metadata.genre=documentary`). Same semantics as List Assets: exact match, case-sensitive, combined with AND, max 10 filters. Without filters, all assets with a source are measured |
+
+**Example**
+
+```bash
+curl "http://localhost:3002/v1/assets/source-sizes?metadata.genre=documentary"
+```
+
+**Response** `200`
+
+```json
+{
+  "data": {
+    "totalBytes": 734003200,
+    "fileCount": 2,
+    "assetIds": ["a1b2c3d4e5f6", "f6e5d4c3b2a1"]
+  }
+}
+```
+
+---
+
 ### Get Asset
 
 ```
@@ -446,6 +480,49 @@ curl -X DELETE http://localhost:3002/v1/assets/a1b2c3d4e5f6
 
 ```json
 { "error": "Asset not found" }
+```
+
+---
+
+## Analytics
+
+### Analytics Overview
+
+```
+GET /v1/analytics/overview
+```
+
+Returns organization-wide analytics: summary (views, watch time, asset count, engagement), time series, top assets and peak hours. All metrics can be narrowed to assets matching custom metadata filters.
+
+**Query Parameters**
+
+| Param | Type | Default | Description |
+|-------|------|---------|-------------|
+| `period` | `string` | `30d` | `7d`, `30d`, `90d` or `all` |
+| `metadata.<key>` | `string` | — | Filter by custom metadata (e.g. `?metadata.genre=documentary`). Same semantics as List Assets: exact match, case-sensitive, combined with AND, max 10 filters |
+
+**Example**
+
+```bash
+curl "http://localhost:3002/v1/analytics/overview?period=7d&metadata.genre=documentary"
+```
+
+**Response** `200`
+
+```json
+{
+  "data": {
+    "summary": {
+      "totalViews": 128,
+      "totalWatchTimeSec": 5400,
+      "totalAssets": 3,
+      "avgEngagementScore": 62
+    },
+    "timeSeries": [{ "date": "2025-06-01", "views": 12, "watchTimeSec": 480, "uniqueSessions": 9 }],
+    "topAssets": [{ "assetId": "a1b2c3d4e5f6", "title": "My Video", "views": 80, "engagementScore": 71 }],
+    "peakHours": [{ "hour": 20, "views": 34 }]
+  }
+}
 ```
 
 ---

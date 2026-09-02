@@ -4,7 +4,7 @@ import path from 'node:path';
 import type { Readable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import type { FastifyInstance } from 'fastify';
-import { and, desc, eq, inArray, like, sql, type SQL } from 'drizzle-orm';
+import { and, desc, eq, inArray, isNotNull, like, sql, type SQL } from 'drizzle-orm';
 import { DeleteObjectCommand, DeleteObjectsCommand, GetObjectCommand, HeadObjectCommand, ListObjectsV2Command, PutObjectCommand } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { nanoid } from 'nanoid';
@@ -14,19 +14,11 @@ import { db } from '../db.js';
 import { env, hasStripe } from '../env.js';
 import { s3Client, s3PublicClient } from '../s3.js';
 import { transcodeQueue } from '../queue.js';
-import { findAssetOrFail, getThumbnailUrl, getSourceKey } from '../services/asset.js';
+import { findAssetOrFail, getThumbnailUrl, getSourceKey, customMetadataSchema, parseMetadataFilters, metadataFilterConditions } from '../services/asset.js';
 import { checkLimit } from '../services/metering.js';
 import { dispatchWebhook } from '../services/webhooks.js';
 import { AppError, NotFoundError } from '../middleware/error-handler.js';
 import { generateVttFromSegments } from '../services/vtt.js';
-
-const customMetadataSchema = z.record(
-  z.string().min(1).max(METADATA_LIMITS.MAX_KEY_LENGTH),
-  z.string().max(METADATA_LIMITS.MAX_VALUE_LENGTH),
-).refine(
-  (obj) => Object.keys(obj).length <= METADATA_LIMITS.MAX_KEYS,
-  `Maximum ${METADATA_LIMITS.MAX_KEYS} metadata entries allowed`,
-);
 
 const createAssetBody = z.object({
   title: z.string().min(1).max(255),
@@ -95,22 +87,14 @@ export async function assetRoutes(app: FastifyInstance) {
 
   /* List assets (search + filters + pagination) */
   app.get<{ Querystring: Record<string, string> }>('/v1/assets', async (request) => {
-    // Metadata filters arrive as dot-notation params: ?metadata.genre=documentary
-    const metadataEntries: Record<string, string> = {};
-    for (const [key, value] of Object.entries(request.query)) {
-      if (key.startsWith('metadata.')) metadataEntries[key.slice('metadata.'.length)] = value;
-    }
-    // Same limits as metadata writes: ≤10 keys, key ≤255, value ≤255
-    const metadataFilters = customMetadataSchema.parse(metadataEntries);
+    const metadataFilters = parseMetadataFilters(request.query);
     const { q, status, sourceType, limit, offset } = listAssetsQuery.parse(request.query);
 
     const conditions: SQL[] = [eq(assets.orgId, request.orgId!)];
     if (q) conditions.push(like(assets.title, `%${escapeLike(q)}%`));
     if (status?.length) conditions.push(inArray(assets.status, status));
     if (sourceType) conditions.push(eq(assets.sourceType, sourceType));
-    for (const [key, value] of Object.entries(metadataFilters)) {
-      conditions.push(sql`JSON_CONTAINS(${assets.customMetadata}, JSON_OBJECT(${key}, ${value}))`);
-    }
+    conditions.push(...metadataFilterConditions(metadataFilters));
     const where = and(...conditions);
 
     const [rows, countResult] = await Promise.all([
@@ -125,6 +109,42 @@ export async function assetRoutes(app: FastifyInstance) {
         hasCustomThumbnail: !!a.customThumbnailKey,
       })),
       pagination: { total: Number(countResult[0].count), limit, offset },
+    };
+  });
+
+  /* Source file sizes for assets matching metadata filters (total + count + ids).
+     Only assets whose source object actually exists on storage are counted. */
+  app.get<{ Querystring: Record<string, string> }>('/v1/assets/source-sizes', async (request) => {
+    const metadataFilters = parseMetadataFilters(request.query);
+
+    const conditions: SQL[] = [eq(assets.orgId, request.orgId!)];
+    conditions.push(...metadataFilterConditions(metadataFilters));
+    conditions.push(isNotNull(assets.sourceKey));
+
+    const rows = await db
+      .select({ id: assets.id, sourceKey: assets.sourceKey })
+      .from(assets)
+      .where(and(...conditions));
+
+    // HEAD each source object in small batches to read its size without downloading
+    const HEAD_BATCH = 25;
+    const found: { id: string; size: number }[] = [];
+    for (let i = 0; i < rows.length; i += HEAD_BATCH) {
+      const batch = await Promise.all(rows.slice(i, i + HEAD_BATCH).map(async (row) => {
+        const head = await s3Client
+          .send(new HeadObjectCommand({ Bucket: env.S3_BUCKET, Key: row.sourceKey! }))
+          .catch(() => null); // object deleted from storage but DB row alive → skip
+        return head?.ContentLength != null ? { id: row.id, size: head.ContentLength } : null;
+      }));
+      found.push(...batch.filter((s): s is { id: string; size: number } => s !== null));
+    }
+
+    return {
+      data: {
+        totalBytes: found.reduce((sum, s) => sum + s.size, 0),
+        fileCount: found.length,
+        assetIds: found.map((s) => s.id),
+      },
     };
   });
 

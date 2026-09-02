@@ -1,9 +1,43 @@
-import { eq, and, type SQL } from 'drizzle-orm';
-import { assets } from '@hovod/db';
-import { S3_PATHS } from '@hovod/db';
+import { eq, and, sql, type SQL } from 'drizzle-orm';
+import { z } from 'zod';
+import { assets, METADATA_LIMITS, S3_PATHS } from '@hovod/db';
 import { db } from '../db.js';
 import { env } from '../env.js';
 import { NotFoundError } from '../middleware/error-handler.js';
+
+/** Validation for user-defined custom metadata (writes and filters alike) */
+export const customMetadataSchema = z.record(
+  z.string().min(1).max(METADATA_LIMITS.MAX_KEY_LENGTH),
+  z.string().max(METADATA_LIMITS.MAX_VALUE_LENGTH),
+).refine(
+  (obj) => Object.keys(obj).length <= METADATA_LIMITS.MAX_KEYS,
+  `Maximum ${METADATA_LIMITS.MAX_KEYS} metadata entries allowed`,
+);
+
+/** Extract ?metadata.<key>=<value> filters and validate them against write limits (≤10 keys, key ≤255, value ≤255) */
+export function parseMetadataFilters(query: Record<string, string>): Record<string, string> {
+  const metadataEntries: Record<string, string> = {};
+  for (const [key, value] of Object.entries(query)) {
+    if (key.startsWith('metadata.')) metadataEntries[key.slice('metadata.'.length)] = value;
+  }
+  return customMetadataSchema.parse(metadataEntries);
+}
+
+/** Exact-match Drizzle conditions on custom_metadata via JSON_CONTAINS (key compared literally, no JSON path) */
+export function metadataFilterConditions(filters: Record<string, string>): SQL[] {
+  return Object.entries(filters).map(
+    ([key, value]) => sql`JSON_CONTAINS(${assets.customMetadata}, JSON_OBJECT(${key}, ${value}))`,
+  );
+}
+
+/** Same filters for raw SQL queries — append the clause to WHERE, the params after the positional ones */
+export function metadataFilterSql(filters: Record<string, string>, assetAlias = 'a'): { clause: string; params: string[] } {
+  const clause = Object.entries(filters)
+    .map(([key]) => ` AND JSON_CONTAINS(${assetAlias}.custom_metadata, JSON_OBJECT(?, ?))`)
+    .join('');
+  const params = Object.entries(filters).flat();
+  return { clause, params };
+}
 
 /**
  * Find an asset by ID or throw NotFoundError.

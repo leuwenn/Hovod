@@ -1,4 +1,4 @@
-import { eq, sql, desc } from 'drizzle-orm';
+import { eq, and, sql, desc } from 'drizzle-orm';
 import { nanoid } from 'nanoid';
 import type { FastifyRequest } from 'fastify';
 import {
@@ -9,6 +9,7 @@ import {
   ID_LENGTH,
 } from '@hovod/db';
 import { db, pool } from '../db.js';
+import { metadataFilterConditions, metadataFilterSql } from './asset.js';
 
 /* ─── Helpers ──────────────────────────────────────────────── */
 
@@ -186,9 +187,14 @@ export async function getAssetAnalytics(assetId: string, period: string) {
 
 /* ─── Global Overview (real-time from raw events) ─────────── */
 
-export async function getOverviewAnalytics(period: string, orgId: string) {
+export async function getOverviewAnalytics(
+  period: string,
+  orgId: string,
+  metadataFilters: Record<string, string> = {},
+) {
   const days = periodToDays(period) ?? 30;
   const dateCutoff = dateMinusDays(days);
+  const mf = metadataFilterSql(metadataFilters);
 
   // Summary from raw events (scoped to org)
   const summaryRows = await rawQuery(
@@ -197,8 +203,8 @@ export async function getOverviewAnalytics(period: string, orgId: string) {
       COALESCE(SUM(CASE WHEN e.event_type = 'heartbeat' THEN 10 ELSE 0 END), 0) as total_watch_time_sec
     FROM analytics_events e
     INNER JOIN assets a ON a.id = e.asset_id
-    WHERE a.org_id = ? AND e.created_at >= ?`,
-    [orgId, dateCutoff],
+    WHERE a.org_id = ? AND e.created_at >= ?${mf.clause}`,
+    [orgId, dateCutoff, ...mf.params],
   );
   const summary = summaryRows[0];
 
@@ -206,14 +212,14 @@ export async function getOverviewAnalytics(period: string, orgId: string) {
   const [assetCount] = await db
     .select({ count: sql<number>`COUNT(*)`.as('cnt') })
     .from(assets)
-    .where(eq(assets.orgId, orgId));
+    .where(and(eq(assets.orgId, orgId), ...metadataFilterConditions(metadataFilters)));
 
   // Average engagement from pre-computed stats (scoped to org)
   const allStats = await db
     .select({ engagementScore: analyticsAssetStats.engagementScore })
     .from(analyticsAssetStats)
     .innerJoin(assets, eq(assets.id, analyticsAssetStats.assetId))
-    .where(eq(assets.orgId, orgId));
+    .where(and(eq(assets.orgId, orgId), ...metadataFilterConditions(metadataFilters)));
   const avgEngagement =
     allStats.length > 0
       ? Math.round(allStats.reduce((s, r) => s + r.engagementScore, 0) / allStats.length)
@@ -228,10 +234,10 @@ export async function getOverviewAnalytics(period: string, orgId: string) {
       COUNT(DISTINCT e.session_id) as unique_sessions
     FROM analytics_events e
     INNER JOIN assets a ON a.id = e.asset_id
-    WHERE a.org_id = ? AND e.created_at >= ?
+    WHERE a.org_id = ? AND e.created_at >= ?${mf.clause}
     GROUP BY DATE_FORMAT(e.created_at, '%Y-%m-%d')
     ORDER BY date`,
-    [orgId, dateCutoff],
+    [orgId, dateCutoff, ...mf.params],
   );
 
   // Top assets from raw events (scoped to org)
@@ -241,12 +247,12 @@ export async function getOverviewAnalytics(period: string, orgId: string) {
       SUM(CASE WHEN e.event_type = 'view_start' THEN 1 ELSE 0 END) as views
     FROM analytics_events e
     INNER JOIN assets a ON a.id = e.asset_id
-    WHERE a.org_id = ? AND e.created_at >= ?
+    WHERE a.org_id = ? AND e.created_at >= ?${mf.clause}
     GROUP BY e.asset_id
     HAVING views > 0
     ORDER BY views DESC
     LIMIT 10`,
-    [orgId, dateCutoff],
+    [orgId, dateCutoff, ...mf.params],
   );
 
   // Enrich top assets with titles and engagement
@@ -278,10 +284,10 @@ export async function getOverviewAnalytics(period: string, orgId: string) {
       SUM(CASE WHEN e.event_type = 'view_start' THEN 1 ELSE 0 END) as views
     FROM analytics_events e
     INNER JOIN assets a ON a.id = e.asset_id
-    WHERE a.org_id = ? AND e.created_at >= ?
+    WHERE a.org_id = ? AND e.created_at >= ?${mf.clause}
     GROUP BY HOUR(e.created_at)
     ORDER BY HOUR(e.created_at)`,
-    [orgId, dateCutoff],
+    [orgId, dateCutoff, ...mf.params],
   );
 
   return {

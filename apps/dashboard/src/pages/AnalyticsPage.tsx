@@ -2,11 +2,12 @@ import { useCallback, useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import type { OverviewAnalytics } from '../lib/types.js';
 import { api } from '../lib/api.js';
-import { formatNumber, formatWatchTime } from '../lib/helpers.js';
+import { formatNumber, formatFileSize, formatWatchTime } from '../lib/helpers.js';
 import { useT } from '../lib/i18n/index.js';
 import { StatCard } from '../components/analytics/StatCard.js';
 import { ViewsChart } from '../components/analytics/ViewsChart.js';
 import { PeakHoursChart } from '../components/analytics/PeakHoursChart.js';
+import { MetadataFilters, type MetadataFilter } from '../components/MetadataFilters.js';
 
 const PERIODS = ['7d', '30d', '90d'] as const;
 
@@ -14,18 +15,26 @@ export function AnalyticsPage() {
   const navigate = useNavigate();
   const [data, setData] = useState<OverviewAnalytics | null>(null);
   const [period, setPeriod] = useState<string>('30d');
+  const [metaFilters, setMetaFilters] = useState<MetadataFilter[]>([]);
+  const [sourceSizes, setSourceSizes] = useState<{ totalBytes: number; fileCount: number } | null>(null);
   const [loading, setLoading] = useState(true);
   const { t } = useT();
 
   const fetchData = useCallback(async () => {
+    // Both endpoints take the same ?metadata.<key>=<value> filters
+    const params = new URLSearchParams({ period });
+    for (const f of metaFilters) params.set(`metadata.${f.key}`, f.value);
     try {
-      const result = await api<OverviewAnalytics>(
-        `/v1/analytics/overview?period=${period}`,
-      );
-      setData(result);
+      const [overview, sizes] = await Promise.all([
+        api<OverviewAnalytics>(`/v1/analytics/overview?${params.toString()}`),
+        api<{ totalBytes: number; fileCount: number; assetIds: string[] }>(`/v1/assets/source-sizes?${params.toString()}`)
+          .catch(() => null), // size stat is non-essential — don't block the overview on it
+      ]);
+      setData(overview);
+      setSourceSizes(sizes);
     } catch { /* ignore polling errors */ }
     finally { setLoading(false); }
-  }, [period]);
+  }, [period, metaFilters]);
 
   useEffect(() => {
     setLoading(true);
@@ -66,9 +75,23 @@ export function AnalyticsPage() {
         </div>
       </div>
 
+      {/* Metadata filter bar (applies to every stat below) */}
+      <div className="flex flex-wrap items-center gap-x-4 gap-y-2 mb-5">
+        <MetadataFilters filters={metaFilters} onChange={setMetaFilters} />
+        {metaFilters.length > 0 && (
+          <button
+            type="button"
+            onClick={() => setMetaFilters([])}
+            className="text-[11px] text-zinc-500 hover:text-zinc-300 underline underline-offset-2 cursor-pointer"
+          >
+            {t.videos.clearFilters}
+          </button>
+        )}
+      </div>
+
       {loading && !data ? (
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-          {[0, 1, 2, 3].map((i) => (
+        <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
+          {[0, 1, 2, 3, 4].map((i) => (
             <div key={i} className="h-24 bg-zinc-900/60 border border-zinc-800/60 rounded-xl animate-pulse" />
           ))}
         </div>
@@ -87,7 +110,7 @@ export function AnalyticsPage() {
       ) : (
         <>
           {/* Stat cards */}
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+          <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
             <StatCard
               label={t.analytics.totalViews}
               value={formatNumber(s!.totalViews)}
@@ -127,6 +150,18 @@ export function AnalyticsPage() {
               icon={
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
                   <polyline points="22 12 18 12 15 21 9 3 6 12 2 12" />
+                </svg>
+              }
+            />
+            <StatCard
+              label={t.analytics.sourceSize}
+              value={sourceSizes ? formatFileSize(sourceSizes.totalBytes) : '—'}
+              subValue={sourceSizes ? `${formatNumber(sourceSizes.fileCount)} ${t.analytics.files}` : undefined}
+              icon={
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+                  <ellipse cx="12" cy="5" rx="9" ry="3" />
+                  <path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3" />
+                  <path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5" />
                 </svg>
               }
             />

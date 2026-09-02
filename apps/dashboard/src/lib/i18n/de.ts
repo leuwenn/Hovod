@@ -89,6 +89,9 @@ export const de: Translations = {
     urlPlaceholder: 'https://beispiel.de/video.mp4',
     importing: 'Importieren...',
     import: 'Importieren',
+    addFilter: 'Filtern',
+    clearFilters: 'Filter zurücksetzen',
+    noResults: 'Keine Videos entsprechen diesen Filtern',
   },
   videoDetail: {
     backToVideos: 'Zurück zu Videos',
@@ -155,6 +158,8 @@ export const de: Translations = {
     avgWatched: 'Ø angesehen',
     viewerRetention: 'Zuschauerbindung',
     qualityDistribution: 'Qualitätsverteilung',
+    sourceSize: 'Größe der Quelldateien',
+    files: 'Dateien',
   },
   settings: {
     title: 'Einstellungen',

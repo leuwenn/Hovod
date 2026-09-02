@@ -2,21 +2,41 @@ import { useCallback, useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import type { Asset } from '../lib/types.js';
 import { api } from '../lib/api.js';
+import { STATUS_CFG } from '../lib/helpers.js';
 import { useT } from '../lib/i18n/index.js';
 import { AssetCard } from '../components/AssetCard.js';
+import { MetadataFilters, type MetadataFilter } from '../components/MetadataFilters.js';
+
+const STATUS_FILTERS = ['created', 'uploaded', 'queued', 'processing', 'ready', 'error'] as const;
+const SEARCH_DEBOUNCE_MS = 350;
 
 export function VideosPage() {
   const navigate = useNavigate();
   const [assets, setAssets] = useState<Asset[]>([]);
   const [search, setSearch] = useState('');
+  const [debouncedSearch, setDebouncedSearch] = useState('');
+  const [statuses, setStatuses] = useState<string[]>([]);
+  const [metaFilters, setMetaFilters] = useState<MetadataFilter[]>([]);
   const { t } = useT();
 
+  // Debounce the search input so each keystroke doesn't hit the API
+  useEffect(() => {
+    const timer = setTimeout(() => setDebouncedSearch(search.trim()), SEARCH_DEBOUNCE_MS);
+    return () => clearTimeout(timer);
+  }, [search]);
+
+  const hasFilters = !!debouncedSearch || statuses.length > 0 || metaFilters.length > 0;
+
   const refresh = useCallback(async () => {
+    const params = new URLSearchParams({ limit: '200' });
+    if (debouncedSearch) params.set('q', debouncedSearch);
+    if (statuses.length) params.set('status', statuses.join(','));
+    for (const f of metaFilters) params.set(`metadata.${f.key}`, f.value);
     try {
-      const list = await api<Asset[]>('/v1/assets?limit=200');
+      const list = await api<Asset[]>(`/v1/assets?${params.toString()}`);
       setAssets(list);
     } catch { /* ignore polling errors */ }
-  }, []);
+  }, [debouncedSearch, statuses, metaFilters]);
 
   useEffect(() => {
     refresh();
@@ -24,9 +44,14 @@ export function VideosPage() {
     return () => clearInterval(i);
   }, [refresh]);
 
-  const filtered = search
-    ? assets.filter((a) => a.title.toLowerCase().includes(search.toLowerCase()))
-    : assets;
+  const toggleStatus = (status: string) =>
+    setStatuses((prev) => prev.includes(status) ? prev.filter((s) => s !== status) : [...prev, status]);
+
+  const clearFilters = () => {
+    setSearch('');
+    setStatuses([]);
+    setMetaFilters([]);
+  };
 
   return (
     <>
@@ -48,11 +73,11 @@ export function VideosPage() {
       </div>
 
       {/* Assets header */}
-      <div className="flex items-center justify-between mb-5">
+      <div className="flex items-center justify-between mb-4">
         <h2 className="text-base font-semibold flex items-center gap-2">
           {t.videos.assets}
           <span className="text-xs font-medium text-zinc-500 bg-zinc-900 border border-zinc-800 px-2.5 py-0.5 rounded-full">
-            {filtered.length}
+            {assets.length}
           </span>
         </h2>
         <input
@@ -65,8 +90,48 @@ export function VideosPage() {
         />
       </div>
 
+      {/* Filter bar: status chips + metadata filters */}
+      <div className="flex flex-wrap items-center gap-x-4 gap-y-2 mb-5">
+        <div className="flex items-center gap-1.5 flex-wrap">
+          {STATUS_FILTERS.map((status) => {
+            const active = statuses.includes(status);
+            const c = STATUS_CFG[status];
+            return (
+              <button
+                key={status}
+                type="button"
+                onClick={() => toggleStatus(status)}
+                aria-pressed={active}
+                className={`inline-flex items-center gap-1.5 h-7 px-2.5 rounded-full text-[11px] font-medium border transition-colors cursor-pointer ${
+                  active
+                    ? `${c.bg} ${c.text} border-transparent`
+                    : 'bg-zinc-900/60 border-zinc-800 text-zinc-500 hover:text-zinc-300'
+                }`}
+              >
+                <span className={`w-1.5 h-1.5 rounded-full ${c.dot}`} aria-hidden="true" />
+                {t.status[status]}
+              </button>
+            );
+          })}
+        </div>
+
+        <div className="flex items-center gap-1.5 flex-wrap">
+          <MetadataFilters filters={metaFilters} onChange={setMetaFilters} />
+        </div>
+
+        {hasFilters && (
+          <button
+            type="button"
+            onClick={clearFilters}
+            className="text-[11px] text-zinc-500 hover:text-zinc-300 underline underline-offset-2 cursor-pointer"
+          >
+            {t.videos.clearFilters}
+          </button>
+        )}
+      </div>
+
       {/* Asset grid */}
-      {filtered.length === 0 ? (
+      {assets.length === 0 ? (
         <div className="py-20 text-center">
           <div className="w-14 h-14 mx-auto mb-4 rounded-full bg-zinc-900 border border-zinc-800 flex items-center justify-center text-zinc-600" aria-hidden="true">
             <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
@@ -74,12 +139,12 @@ export function VideosPage() {
               <path d="M9 3v3M15 3v3M10 12l2-2 2 2" />
             </svg>
           </div>
-          <p className="text-sm text-zinc-400">{t.videos.noVideos}</p>
-          <p className="text-xs text-zinc-600 mt-1">{t.videos.noVideosHint}</p>
+          <p className="text-sm text-zinc-400">{hasFilters ? t.videos.noResults : t.videos.noVideos}</p>
+          {!hasFilters && <p className="text-xs text-zinc-600 mt-1">{t.videos.noVideosHint}</p>}
         </div>
       ) : (
         <div className="grid grid-cols-[repeat(auto-fill,minmax(250px,1fr))] gap-4">
-          {filtered.map((asset) => (
+          {assets.map((asset) => (
             <AssetCard
               key={asset.id}
               asset={asset}

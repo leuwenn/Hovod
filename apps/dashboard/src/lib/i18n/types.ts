@@ -89,6 +89,9 @@ export interface Translations {
     urlPlaceholder: string;
     importing: string;
     import: string;
+    addFilter: string;
+    clearFilters: string;
+    noResults: string;
   };
   videoDetail: {
     backToVideos: string;
@@ -155,6 +158,8 @@ export interface Translations {
     avgWatched: string;
     viewerRetention: string;
     qualityDistribution: string;
+    sourceSize: string;
+    files: string;
   };
   settings: {
     title: string;

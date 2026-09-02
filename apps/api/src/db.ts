@@ -68,6 +68,11 @@ export async function runMigrations() {
     ALTER TABLE assets ADD COLUMN org_id VARCHAR(36) NULL AFTER id
   `).catch(() => { /* column already exists */ });
 
+  // Composite index for asset listing (org_id filter + created_at sort)
+  await pool.query(`
+    ALTER TABLE assets ADD INDEX idx_assets_org_id_created (org_id, created_at)
+  `).catch(() => { /* index already exists */ });
+
   await pool.query(`
     CREATE TABLE IF NOT EXISTS renditions (
       id VARCHAR(36) PRIMARY KEY,

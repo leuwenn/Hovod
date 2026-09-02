@@ -266,10 +266,10 @@ export async function assetRoutes(app: FastifyInstance) {
       }
     }
 
-    // Store AI options in asset metadata
+    // Store AI options in asset metadata (legacy rows may still hold a double-encoded string)
     if (body?.aiOptions) {
       const existing = asset.metadata ? (typeof asset.metadata === 'string' ? JSON.parse(asset.metadata) : asset.metadata) as Record<string, unknown> : {};
-      await db.update(assets).set({ metadata: JSON.stringify({ ...existing, aiOptions: body.aiOptions }) }).where(eq(assets.id, asset.id));
+      await db.update(assets).set({ metadata: { ...existing, aiOptions: body.aiOptions } }).where(eq(assets.id, asset.id));
     }
 
     const jobId = nanoid(ID_LENGTH.JOB);
